@@ -1,14 +1,17 @@
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
 import time
 import tweepy
 from telegram import Bot
 import requests
 from datetime import datetime, timezone
 
-# ======= CONFIGURATION =======
-BEARER_TOKEN = "AAAAAAAAAAAAAAAAAAAAAEv12wEAAAAAG%2FeahYsrkvmLB2Q%2FiacOtahNggc%3DEr5Bdn3na5TtieUQtofk7pCHV3sq7vKF8zY141UuJ3gcAt5Jkq"
-TELEGRAM_TOKEN = "8055180447:AAF_LoJDDCw7labMmDaPisIJMt1OHqNR3KQ"
-TELEGRAM_CHAT_ID = "-1002723931406"  # e.g. -100xxxxxxxxx
-TWITTER_USERNAME = "realDonaldTrump"
+BEARER_TOKEN = os.getenv("BEARER_TOKEN")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+TWITTER_USERNAME = os.getenv("TWITTER_USERNAME", "realDonaldTrump")
 
 client = tweepy.Client(bearer_token=BEARER_TOKEN)
 bot = Bot(token=TELEGRAM_TOKEN)
@@ -17,29 +20,36 @@ def get_latest_tweet_with_media(username):
     user = client.get_user(username=username)
     user_id = user.data.id
 
-    # Get tweets with creation date and media fields
     tweets = client.get_users_tweets(
         id=user_id,
         max_results=5,
-        tweet_fields=["created_at", "text", "attachments"],
+        tweet_fields=["created_at", "text", "attachments", "referenced_tweets"],
         expansions=["attachments.media_keys"],
         media_fields=["url", "type", "preview_image_url"]
     )
     if tweets.data:
-        # Go through all tweets, look for today's only
         now_utc = datetime.now(timezone.utc).date()
         for tweet in tweets.data:
             tweet_created_at = tweet.created_at.astimezone(timezone.utc).date()
-            if tweet_created_at == now_utc:
-                media = []
-                # Look up media attachments if present
-                if hasattr(tweets, "includes") and tweets.includes and "media" in tweets.includes:
-                    for m in tweets.includes["media"]:
-                        # Is this media attached to this tweet?
-                        if "attachments" in tweet.data and "media_keys" in tweet.data["attachments"]:
-                            if m.media_key in tweet.data["attachments"]["media_keys"]:
-                                media.append(m)
-                return tweet.text, tweet.id, media
+            if tweet_created_at != now_utc:
+                continue
+            is_reply = False
+            is_retweet = False
+            if hasattr(tweet, "referenced_tweets") and tweet.referenced_tweets:
+                for ref in tweet.referenced_tweets:
+                    if ref.type == "retweeted":
+                        is_retweet = True
+                    if ref.type == "replied_to":
+                        is_reply = True
+            if is_retweet or is_reply:
+                continue
+            media = []
+            if hasattr(tweets, "includes") and tweets.includes and "media" in tweets.includes:
+                for m in tweets.includes["media"]:
+                    if "attachments" in tweet.data and "media_keys" in tweet.data["attachments"]:
+                        if m.media_key in tweet.data["attachments"]["media_keys"]:
+                            media.append(m)
+            return tweet.text, tweet.id, media
     return None, None, []
 
 last_tweet_id = None
@@ -68,10 +78,10 @@ while True:
             print(f"Forwarded Trump tweet: {tweet_id}")
             last_tweet_id = tweet_id
         else:
-            print("No new tweet for today.")
+            print("No new tweet for today (not retweet/reply).")
     except tweepy.errors.TooManyRequests:
         print("Twitter rate limit hit! Waiting 10 minutes...")
         time.sleep(600)
     except Exception as e:
         print("Error:", e)
-    time.sleep(60)  # Check every minute
+    time.sleep(60)
