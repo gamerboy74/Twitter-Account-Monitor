@@ -6,17 +6,18 @@ import tweepy
 from telegram import Bot
 from datetime import datetime, timezone
 
+# Load environment variables from .env
 load_dotenv()
 
 BEARER_TOKEN = os.getenv("BEARER_TOKEN")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-TWITTER_USERNAMES = os.getenv("TWITTER_USERNAMES").split(",")
+TWITTER_USERNAMES = os.getenv("TWITTER_USERNAMES", "realDonaldTrump").split(",")
 
 client = tweepy.Client(bearer_token=BEARER_TOKEN)
 bot = Bot(token=TELEGRAM_TOKEN)
 
-# Track last tweet and check time for each account
+# Track last tweet ID and check time per account
 last_tweet_ids = {u: None for u in TWITTER_USERNAMES}
 last_checked = {u: 0 for u in TWITTER_USERNAMES}
 CHECK_INTERVAL = 300  # 5 minutes
@@ -56,6 +57,8 @@ def get_latest_tweet_with_media(username):
                                 media.append(m)
                 return tweet.text, tweet.id, media
         return None, None, []
+    except tweepy.errors.TooManyRequests as e:
+        raise e
     except Exception as e:
         print(f"Error getting tweet for {username}: {e}")
         return None, None, []
@@ -63,7 +66,7 @@ def get_latest_tweet_with_media(username):
 while True:
     now = time.time()
     for username in TWITTER_USERNAMES:
-        # Check every 5 minutes per account
+        # Only check if enough time has passed
         if now - last_checked[username] < CHECK_INTERVAL:
             continue
         try:
@@ -91,10 +94,11 @@ while True:
             else:
                 print(f"No new tweet for today from @{username} (not retweet/reply).")
         except tweepy.errors.TooManyRequests:
-            print(f"Rate limit hit for @{username}, waiting 10 more minutes...")
-            last_checked[username] = now + 600  # wait more if rate limit
+            print(f"Rate limit hit for @{username}, pausing this account for 1 hour.")
+            last_checked[username] = now + 3600  # Pause for 1 hour
+            continue
         except Exception as e:
             print(f"Error for @{username}: {e}")
         last_checked[username] = now
-        time.sleep(2)  # polite gap between accounts
+        time.sleep(2)  # Delay between account checks
     time.sleep(10)
