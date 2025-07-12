@@ -2,6 +2,7 @@ import os
 import time
 import httpx
 import asyncio
+import re
 from dotenv import load_dotenv
 import tweepy
 from telegram import Bot
@@ -25,6 +26,31 @@ async def download_image_async(url):
         resp.raise_for_status()
         return resp.content
 
+def clean_and_format_tweet_text(tweet, media):
+    """Removes t.co media links, converts real links to Markdown [View Link]."""
+    text = tweet.text
+    if hasattr(tweet, "entities") and tweet.entities and "urls" in tweet.entities:
+        for url_obj in tweet.entities["urls"]:
+            url = url_obj["url"]
+            expanded_url = url_obj.get("expanded_url", url)
+            # Check if it's a media link (points to Twitter media/image/video)
+            is_media_link = False
+            if media:
+                if expanded_url.startswith("https://twitter.com") or expanded_url.startswith("https://pbs.twimg.com"):
+                    is_media_link = True
+            if is_media_link:
+                # Remove media t.co links
+                text = text.replace(url, "")
+            else:
+                # Format real link as Markdown
+                label = "View Link"
+                markdown_link = f"[{label}]({expanded_url})"
+                text = text.replace(url, markdown_link)
+    # Clean up spaces and any leftover double newlines
+    text = re.sub(r'\s+\n', '\n', text).strip()
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
 def get_today_tweets_with_media(username):
     try:
         user = client.get_user(username=username)
@@ -32,7 +58,7 @@ def get_today_tweets_with_media(username):
         tweets = client.get_users_tweets(
             id=user_id,
             max_results=5,
-            tweet_fields=["created_at", "text", "attachments", "referenced_tweets"],
+            tweet_fields=["created_at", "text", "attachments", "referenced_tweets", "entities"],
             expansions=["attachments.media_keys"],
             media_fields=["url", "type", "preview_image_url"]
         )
@@ -59,7 +85,7 @@ def get_today_tweets_with_media(username):
                         if "attachments" in tweet.data and "media_keys" in tweet.data["attachments"]:
                             if m.media_key in tweet.data["attachments"]["media_keys"]:
                                 media.append(m)
-                result.append((tweet.id, tweet.text, media))
+                result.append((tweet, tweet.id, media))
         return result
     except tweepy.errors.TooManyRequests as e:
         print(f"Rate limit hit for @{username}, waiting 16 minutes...")
@@ -78,12 +104,13 @@ async def main():
             print(f"\n[+] Checking @{username} at {time.strftime('%H:%M:%S')}")
             todays_tweets = get_today_tweets_with_media(username)
             # Filter new tweets (not already sent)
-            new_tweets = [t for t in todays_tweets if t[0] not in sent_tweet_ids[username]]
+            new_tweets = [t for t in todays_tweets if t[1] not in sent_tweet_ids[username]]
             if new_tweets:
-                for tweet_id, tweet_text, media in reversed(new_tweets):
+                for tweet, tweet_id, media in reversed(new_tweets):
+                    cleaned_text = clean_and_format_tweet_text(tweet, media)
                     caption = (
                         f"🧑‍💻 *{username}* just tweeted:\n\n"
-                        f"{tweet_text}\n\n"
+                        f"{cleaned_text}\n\n"
                         f"🔗 [View on Twitter](https://twitter.com/{username}/status/{tweet_id})"
                     )
                     sent = False
