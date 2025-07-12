@@ -1,6 +1,7 @@
 import os
 import time
 import requests
+import asyncio
 from dotenv import load_dotenv
 import tweepy
 from telegram import Bot
@@ -62,50 +63,52 @@ def get_today_tweets_with_media(username):
         print(f"Error getting tweets for {username}: {e}")
         return []
 
-while True:
-    now = time.time()
-    for username in TWITTER_USERNAMES:
-        if now - last_checked[username] < RATE_LIMIT_INTERVAL:
-            continue
-        print(f"\n[+] Checking @{username} at {time.strftime('%H:%M:%S')}")
-        todays_tweets = get_today_tweets_with_media(username)
-        # Filter new tweets (not already sent)
-        new_tweets = [t for t in todays_tweets if t[0] not in sent_tweet_ids[username]]
-        if new_tweets:
-            # Send from oldest to newest
-            for tweet_id, tweet_text, media in reversed(new_tweets):
-                msg = f"🕊️ @{username}:\n\n{tweet_text}\n\nhttps://twitter.com/{username}/status/{tweet_id}"
-                sent = False
-                if media:
-                    for m in media:
-                        if m.type == "photo":
-                            image_url = m.url
-                            image_data = requests.get(image_url).content
-                            bot.send_photo(chat_id=TELEGRAM_CHAT_ID, photo=image_data, caption=msg if not sent else None)
-                            sent = True
-                        elif m.type == "video":
-                            bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=f"{msg}\n\n[Video Tweet: Open in Twitter]")
-                            sent = True
-                        elif m.type == "animated_gif":
-                            bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=f"{msg}\n\n[GIF Tweet: Open in Twitter]")
-                            sent = True
-                if not sent:
-                    bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=msg)
-                print(f"Forwarded @{username}'s tweet: {tweet_id}")
-                sent_tweet_ids[username].add(tweet_id)
-        else:
-            print(f"No new tweets for today from @{username}.")
-        last_checked[username] = now
-        time.sleep(2)  # Polite gap between accounts
-
-    # Sleeping logic: Only sleep for single account, otherwise loop and catch due ones
-    if len(TWITTER_USERNAMES) == 1:
-        username = TWITTER_USERNAMES[0]
+async def main():
+    while True:
         now = time.time()
-        time_to_wait = RATE_LIMIT_INTERVAL - (now - last_checked[username])
-        if time_to_wait > 0:
-            print(f"Sleeping {int(time_to_wait)} seconds before next check.")
-            time.sleep(time_to_wait)
-    else:
-        # For multiple accounts, check again after a short delay to see if another is due
-        time.sleep(10)
+        for username in TWITTER_USERNAMES:
+            if now - last_checked[username] < RATE_LIMIT_INTERVAL:
+                continue
+            print(f"\n[+] Checking @{username} at {time.strftime('%H:%M:%S')}")
+            todays_tweets = get_today_tweets_with_media(username)
+            # Filter new tweets (not already sent)
+            new_tweets = [t for t in todays_tweets if t[0] not in sent_tweet_ids[username]]
+            if new_tweets:
+                for tweet_id, tweet_text, media in reversed(new_tweets):
+                    msg = f"🕊️ @{username}:\n\n{tweet_text}\n\nhttps://twitter.com/{username}/status/{tweet_id}"
+                    sent = False
+                    if media:
+                        for m in media:
+                            if m.type == "photo":
+                                image_url = m.url
+                                image_data = requests.get(image_url).content
+                                await bot.send_photo(chat_id=TELEGRAM_CHAT_ID, photo=image_data, caption=msg if not sent else None)
+                                sent = True
+                            elif m.type == "video":
+                                await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=f"{msg}\n\n[Video Tweet: Open in Twitter]")
+                                sent = True
+                            elif m.type == "animated_gif":
+                                await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=f"{msg}\n\n[GIF Tweet: Open in Twitter]")
+                                sent = True
+                    if not sent:
+                        await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=msg)
+                    print(f"Forwarded @{username}'s tweet: {tweet_id}")
+                    sent_tweet_ids[username].add(tweet_id)
+            else:
+                print(f"No new tweets for today from @{username}.")
+            last_checked[username] = now
+            await asyncio.sleep(2)
+
+        # Sleeping logic: Only sleep for single account, else loop and catch due ones
+        if len(TWITTER_USERNAMES) == 1:
+            username = TWITTER_USERNAMES[0]
+            now = time.time()
+            time_to_wait = RATE_LIMIT_INTERVAL - (now - last_checked[username])
+            if time_to_wait > 0:
+                print(f"Sleeping {int(time_to_wait)} seconds before next check.")
+                await asyncio.sleep(time_to_wait)
+        else:
+            await asyncio.sleep(10)
+
+if __name__ == "__main__":
+    asyncio.run(main())
