@@ -8,49 +8,53 @@ import tweepy
 from telegram import Bot
 from datetime import datetime, timezone
 
+# === Load Config ===
 load_dotenv()
-BEARER_TOKEN = os.getenv("BEARER_TOKEN")
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+BEARER_TOKEN      = os.getenv("BEARER_TOKEN")
+TELEGRAM_TOKEN    = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID  = os.getenv("TELEGRAM_CHAT_ID")
 TWITTER_USERNAMES = os.getenv("TWITTER_USERNAMES").split(",")
 
 client = tweepy.Client(bearer_token=BEARER_TOKEN)
 bot = Bot(token=TELEGRAM_TOKEN)
 sent_tweet_ids = {u: set() for u in TWITTER_USERNAMES}
-last_checked = {u: 0 for u in TWITTER_USERNAMES}
+last_checked   = {u: 0 for u in TWITTER_USERNAMES}
 RATE_LIMIT_INTERVAL = 16 * 60  # 16 minutes
 
+# === Utility: Download Images Asynchronously ===
 async def download_image_async(url):
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.get(url)
         resp.raise_for_status()
         return resp.content
 
+# === Clean and Format Tweet Text ===
 def clean_and_format_tweet_text(tweet, media):
-    """Removes t.co media links, converts real links to Markdown [View Link]."""
+    """Removes t.co media links & /photo/1; formats real links as [View Link](url) Markdown."""
     text = tweet.text
     if hasattr(tweet, "entities") and tweet.entities and "urls" in tweet.entities:
         for url_obj in tweet.entities["urls"]:
             url = url_obj["url"]
             expanded_url = url_obj.get("expanded_url", url)
-            # Check if it's a media link (points to Twitter media/image/video)
+            # Remove media links (t.co pointing to twitter.com/media, /photo/1, or pbs.twimg)
             is_media_link = False
-            if media:
-                if expanded_url.startswith("https://twitter.com") or expanded_url.startswith("https://pbs.twimg.com"):
-                    is_media_link = True
+            if (expanded_url.startswith("https://twitter.com") or
+                expanded_url.startswith("https://pbs.twimg.com") or
+                "/photo/" in expanded_url or
+                "/video/" in expanded_url):
+                is_media_link = True
             if is_media_link:
-                # Remove media t.co links
                 text = text.replace(url, "")
             else:
-                # Format real link as Markdown
                 label = "View Link"
                 markdown_link = f"[{label}]({expanded_url})"
                 text = text.replace(url, markdown_link)
-    # Clean up spaces and any leftover double newlines
+    # Clean up extra spaces and newlines
     text = re.sub(r'\s+\n', '\n', text).strip()
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
+# === Fetch Today's Tweets with Media ===
 def get_today_tweets_with_media(username):
     try:
         user = client.get_user(username=username)
@@ -87,7 +91,7 @@ def get_today_tweets_with_media(username):
                                 media.append(m)
                 result.append((tweet, tweet.id, media))
         return result
-    except tweepy.errors.TooManyRequests as e:
+    except tweepy.errors.TooManyRequests:
         print(f"Rate limit hit for @{username}, waiting 16 minutes...")
         time.sleep(RATE_LIMIT_INTERVAL)
         return []
@@ -95,6 +99,7 @@ def get_today_tweets_with_media(username):
         print(f"Error getting tweets for {username}: {e}")
         return []
 
+# === Main Async Loop ===
 async def main():
     while True:
         now = time.time()
@@ -103,7 +108,7 @@ async def main():
                 continue
             print(f"\n[+] Checking @{username} at {time.strftime('%H:%M:%S')}")
             todays_tweets = get_today_tweets_with_media(username)
-            # Filter new tweets (not already sent)
+            # Only send new tweets (not already sent)
             new_tweets = [t for t in todays_tweets if t[1] not in sent_tweet_ids[username]]
             if new_tweets:
                 for tweet, tweet_id, media in reversed(new_tweets):
@@ -129,13 +134,25 @@ async def main():
                                 except Exception as ex:
                                     print(f"Failed to send image: {ex}")
                             elif m.type == "video":
-                                await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=f"{caption}\n\n[Video Tweet: Open in Twitter]", parse_mode="Markdown")
+                                await bot.send_message(
+                                    chat_id=TELEGRAM_CHAT_ID,
+                                    text=f"{caption}\n\n[Video Tweet: Open in Twitter]",
+                                    parse_mode="Markdown"
+                                )
                                 sent = True
                             elif m.type == "animated_gif":
-                                await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=f"{caption}\n\n[GIF Tweet: Open in Twitter]", parse_mode="Markdown")
+                                await bot.send_message(
+                                    chat_id=TELEGRAM_CHAT_ID,
+                                    text=f"{caption}\n\n[GIF Tweet: Open in Twitter]",
+                                    parse_mode="Markdown"
+                                )
                                 sent = True
                     if not sent:
-                        await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=caption, parse_mode="Markdown")
+                        await bot.send_message(
+                            chat_id=TELEGRAM_CHAT_ID,
+                            text=caption,
+                            parse_mode="Markdown"
+                        )
                     print(f"Forwarded @{username}'s tweet: {tweet_id}")
                     sent_tweet_ids[username].add(tweet_id)
             else:
@@ -143,7 +160,7 @@ async def main():
             last_checked[username] = now
             await asyncio.sleep(2)
 
-        # Sleeping logic: Only sleep for single account, else loop and catch due ones
+        # Sleep logic for free API safety
         if len(TWITTER_USERNAMES) == 1:
             username = TWITTER_USERNAMES[0]
             now = time.time()
