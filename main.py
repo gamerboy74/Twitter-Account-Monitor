@@ -1,6 +1,6 @@
 import os
 import time
-import requests
+import httpx
 import asyncio
 from dotenv import load_dotenv
 import tweepy
@@ -18,6 +18,12 @@ bot = Bot(token=TELEGRAM_TOKEN)
 sent_tweet_ids = {u: set() for u in TWITTER_USERNAMES}
 last_checked = {u: 0 for u in TWITTER_USERNAMES}
 RATE_LIMIT_INTERVAL = 16 * 60  # 16 minutes
+
+async def download_image_async(url):
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        return resp.content
 
 def get_today_tweets_with_media(username):
     try:
@@ -75,23 +81,34 @@ async def main():
             new_tweets = [t for t in todays_tweets if t[0] not in sent_tweet_ids[username]]
             if new_tweets:
                 for tweet_id, tweet_text, media in reversed(new_tweets):
-                    msg = f"🕊️ @{username}:\n\n{tweet_text}\n\nhttps://twitter.com/{username}/status/{tweet_id}"
+                    caption = (
+                        f"🧑‍💻 *{username}* just tweeted:\n\n"
+                        f"{tweet_text}\n\n"
+                        f"🔗 [View on Twitter](https://twitter.com/{username}/status/{tweet_id})"
+                    )
                     sent = False
                     if media:
                         for m in media:
                             if m.type == "photo":
-                                image_url = m.url
-                                image_data = requests.get(image_url).content
-                                await bot.send_photo(chat_id=TELEGRAM_CHAT_ID, photo=image_data, caption=msg if not sent else None)
-                                sent = True
+                                try:
+                                    image_data = await download_image_async(m.url)
+                                    await bot.send_photo(
+                                        chat_id=TELEGRAM_CHAT_ID,
+                                        photo=image_data,
+                                        caption=caption,
+                                        parse_mode="Markdown"
+                                    )
+                                    sent = True
+                                except Exception as ex:
+                                    print(f"Failed to send image: {ex}")
                             elif m.type == "video":
-                                await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=f"{msg}\n\n[Video Tweet: Open in Twitter]")
+                                await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=f"{caption}\n\n[Video Tweet: Open in Twitter]", parse_mode="Markdown")
                                 sent = True
                             elif m.type == "animated_gif":
-                                await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=f"{msg}\n\n[GIF Tweet: Open in Twitter]")
+                                await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=f"{caption}\n\n[GIF Tweet: Open in Twitter]", parse_mode="Markdown")
                                 sent = True
                     if not sent:
-                        await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=msg)
+                        await bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=caption, parse_mode="Markdown")
                     print(f"Forwarded @{username}'s tweet: {tweet_id}")
                     sent_tweet_ids[username].add(tweet_id)
             else:
