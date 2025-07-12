@@ -10,7 +10,7 @@ load_dotenv()
 BEARER_TOKEN = os.getenv("BEARER_TOKEN")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-TWITTER_USERNAMES = os.getenv("TWITTER_USERNAMES", "realDonaldTrump").split(",")
+TWITTER_USERNAMES = os.getenv("TWITTER_USERNAMES").split(",")
 
 client = tweepy.Client(bearer_token=BEARER_TOKEN)
 bot = Bot(token=TELEGRAM_TOKEN)
