@@ -20,7 +20,7 @@ bot = Bot(token=TELEGRAM_TOKEN)
 # Track last tweet ID and check time per account
 last_tweet_ids = {u: None for u in TWITTER_USERNAMES}
 last_checked = {u: 0 for u in TWITTER_USERNAMES}
-CHECK_INTERVAL = 300  # 5 minutes
+CHECK_INTERVAL = 600  # 5 minutes
 
 def get_latest_tweet_with_media(username):
     try:
