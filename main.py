@@ -10,15 +10,15 @@ load_dotenv()
 BEARER_TOKEN = os.getenv("BEARER_TOKEN")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-TWITTER_USERNAMES = os.getenv("TWITTER_USERNAMES").split(",")
+TWITTER_USERNAMES = os.getenv("TWITTER_USERNAMES", "realDonaldTrump").split(",")
 
 client = tweepy.Client(bearer_token=BEARER_TOKEN)
 bot = Bot(token=TELEGRAM_TOKEN)
-last_tweet_ids = {u: None for u in TWITTER_USERNAMES}
+sent_tweet_ids = {u: set() for u in TWITTER_USERNAMES}
 last_checked = {u: 0 for u in TWITTER_USERNAMES}
 RATE_LIMIT_INTERVAL = 16 * 60  # 16 minutes
 
-def get_latest_tweet_with_media(username):
+def get_today_tweets_with_media(username):
     try:
         user = client.get_user(username=username)
         user_id = user.data.id
@@ -29,6 +29,7 @@ def get_latest_tweet_with_media(username):
             expansions=["attachments.media_keys"],
             media_fields=["url", "type", "preview_image_url"]
         )
+        result = []
         if tweets.data:
             now_utc = datetime.now(timezone.utc).date()
             for tweet in tweets.data:
@@ -51,52 +52,54 @@ def get_latest_tweet_with_media(username):
                         if "attachments" in tweet.data and "media_keys" in tweet.data["attachments"]:
                             if m.media_key in tweet.data["attachments"]["media_keys"]:
                                 media.append(m)
-                return tweet.text, tweet.id, media
-        return None, None, []
+                result.append((tweet.id, tweet.text, media))
+        return result
     except tweepy.errors.TooManyRequests as e:
         print(f"Rate limit hit for @{username}, waiting 16 minutes...")
         time.sleep(RATE_LIMIT_INTERVAL)
-        return None, None, []
+        return []
     except Exception as e:
-        print(f"Error getting tweet for {username}: {e}")
-        return None, None, []
+        print(f"Error getting tweets for {username}: {e}")
+        return []
 
 while True:
     now = time.time()
     for username in TWITTER_USERNAMES:
-        # Only poll if enough time has passed for this account
         if now - last_checked[username] < RATE_LIMIT_INTERVAL:
             continue
         print(f"\n[+] Checking @{username} at {time.strftime('%H:%M:%S')}")
-        tweet, tweet_id, media = get_latest_tweet_with_media(username)
-        if tweet_id and tweet_id != last_tweet_ids[username]:
-            msg = f"🕊️ @{username}:\n\n{tweet}\n\nhttps://twitter.com/{username}/status/{tweet_id}"
-            sent = False
-            if media:
-                for m in media:
-                    if m.type == "photo":
-                        image_url = m.url
-                        image_data = requests.get(image_url).content
-                        bot.send_photo(chat_id=TELEGRAM_CHAT_ID, photo=image_data, caption=msg if not sent else None)
-                        sent = True
-                    elif m.type == "video":
-                        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=f"{msg}\n\n[Video Tweet: Open in Twitter]")
-                        sent = True
-                    elif m.type == "animated_gif":
-                        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=f"{msg}\n\n[GIF Tweet: Open in Twitter]")
-                        sent = True
-            if not sent:
-                bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=msg)
-            print(f"Forwarded @{username}'s tweet: {tweet_id}")
-            last_tweet_ids[username] = tweet_id
+        todays_tweets = get_today_tweets_with_media(username)
+        # Filter new tweets (not already sent)
+        new_tweets = [t for t in todays_tweets if t[0] not in sent_tweet_ids[username]]
+        if new_tweets:
+            # Send from oldest to newest
+            for tweet_id, tweet_text, media in reversed(new_tweets):
+                msg = f"🕊️ @{username}:\n\n{tweet_text}\n\nhttps://twitter.com/{username}/status/{tweet_id}"
+                sent = False
+                if media:
+                    for m in media:
+                        if m.type == "photo":
+                            image_url = m.url
+                            image_data = requests.get(image_url).content
+                            bot.send_photo(chat_id=TELEGRAM_CHAT_ID, photo=image_data, caption=msg if not sent else None)
+                            sent = True
+                        elif m.type == "video":
+                            bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=f"{msg}\n\n[Video Tweet: Open in Twitter]")
+                            sent = True
+                        elif m.type == "animated_gif":
+                            bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=f"{msg}\n\n[GIF Tweet: Open in Twitter]")
+                            sent = True
+                if not sent:
+                    bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=msg)
+                print(f"Forwarded @{username}'s tweet: {tweet_id}")
+                sent_tweet_ids[username].add(tweet_id)
         else:
-            print(f"No new tweet for today from @{username} (not retweet/reply).")
+            print(f"No new tweets for today from @{username}.")
         last_checked[username] = now
-        time.sleep(2)  # Polite delay between account checks
+        time.sleep(2)  # Polite gap between accounts
 
-    # Handle sleeping logic
+    # Sleeping logic: Only sleep for single account, otherwise loop and catch due ones
     if len(TWITTER_USERNAMES) == 1:
-        # If only 1 account, sleep exactly until it's time for next poll
         username = TWITTER_USERNAMES[0]
         now = time.time()
         time_to_wait = RATE_LIMIT_INTERVAL - (now - last_checked[username])
@@ -104,5 +107,5 @@ while True:
             print(f"Sleeping {int(time_to_wait)} seconds before next check.")
             time.sleep(time_to_wait)
     else:
-        # For multiple accounts, sleep a short interval before re-checking who is next
+        # For multiple accounts, check again after a short delay to see if another is due
         time.sleep(10)
