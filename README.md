@@ -101,12 +101,6 @@ twitter-to-telegram-forwarder/
 
 ---
 
-## 📄 License
-
-Licensed under the MIT License.
-
----
-
 ## 🙏 Acknowledgements
 
 - [Tweepy](https://github.com/tweepy/tweepy)
